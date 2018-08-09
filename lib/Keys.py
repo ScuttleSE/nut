@@ -11,22 +11,22 @@ def keyAreaKey(cryptoType, i):
 
 def get(key):
 	return keys[key]
-	
+
 def getTitleKek(i):
 	return titleKeks[i]
-	
+
 def decryptTitleKey(key, i):
 	kek = getTitleKek(i)
-	
+
 	crypto = aes128.AESECB(uhx(kek))
 	return crypto.decrypt(key)
-	
+
 def encryptTitleKey(key, i):
 	kek = getTitleKek(i)
-	
+
 	crypto = aes128.AESECB(uhx(kek))
 	return crypto.encrypt(key)
-	
+
 def changeTitleKeyMasterKey(key, currentMasterKeyIndex, newMasterKeyIndex):
 	return encryptTitleKey(decryptTitleKey(key, currentMasterKeyIndex), newMasterKeyIndex)
 
@@ -46,8 +46,6 @@ def generateKek(src, masterKey, kek_seed, key_seed):
 	else:
 		return src_kek
 
-	
-	
 
 def load(fileName):
 	global keyAreaKeys
@@ -58,7 +56,7 @@ def load(fileName):
 			r = re.match('\s*([a-z0-9_]+)\s*=\s*([A-F0-9]+)\s*', line, re.I)
 			if r:
 				keys[r.group(1)] = r.group(2)
-	
+
 	#crypto = aes128.AESCTR(uhx(key), uhx('00000000000000000000000000000010'))
 	aes_kek_generation_source = uhx(keys['aes_kek_generation_source'])
 	aes_key_generation_source = uhx(keys['aes_key_generation_source'])
@@ -67,7 +65,7 @@ def load(fileName):
 	for i in range(10):
 		keyAreaKeys.append([None, None, None])
 
-	
+
 	for i in range(10):
 		masterKeyName = 'master_key_0' + str(i)
 		if masterKeyName in keys.keys():
@@ -81,8 +79,8 @@ def load(fileName):
 		else:
 			titleKeks.append('0' * 32) 
 
-				
-load('Keys.txt')
+
+load('keys.txt')
 
 #for k in titleKeks:
 #	print('titleKek = ' + k)

@@ -1,2 +1,5 @@
 nut.json
 keys.txt
+titles.txt
+__pycache__/
+*.py[cod]
