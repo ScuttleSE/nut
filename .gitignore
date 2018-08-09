@@ -1,5 +1,10 @@
 nut.json
 keys.txt
 titles.txt
+files.txt
 __pycache__/
 *.py[cod]
+Certificate.cert
+ShopN.pem
+Ticket.tik
+nx_tls_client_cert.pem
