@@ -310,8 +310,7 @@ class NcaHeader(File):
 
 		self.masterKey = (self.cryptoType if self.cryptoType > self.cryptoType2 else self.cryptoType2)-1
 		
-		self.seek(0x300)
-		self.encKeyBlock = self.read(0x40)
+		self.encKeyBlock = self.getKeyBlock()
 		#for i in range(4):
 		#	offset = i * 0x10
 		#	key = encKeyBlock[offset:offset+0x10]
@@ -345,6 +344,17 @@ class NcaHeader(File):
 
 	def hasTitleRights(self):
 		return self.rightsId != (b'0' * 32)
+
+	def getKeyBlock(self):
+		self.seek(0x300)
+		return self.read(0x40)
+
+	def setKeyBlock(self, value):
+		if len(value) != 0x40:
+			raise IOError('invalid keyblock size')
+
+		self.seek(0x300)
+		return self.write(value)
 
 	def getCryptoType2(self):
 		self.seek(0x220)
@@ -551,13 +561,13 @@ class Nsp(PFS0):
 		self.hasValidTicket = None
 		self.timestamp = None
 		self.version = None
+
+		super(Nsp, self).__init__(None, path, mode)
 		
 		if path:
 			self.setPath(path)
 			#if files:
 			#	self.pack(files)
-			
-		super(Nsp, self).__init__(None, path, mode)
 				
 		if self.titleId and self.isUnlockable():
 			print('unlockable title found ' + self.path)
@@ -616,20 +626,26 @@ class Nsp(PFS0):
 			self.title().setRightsId(rightsId)
 			#print('rightsId = ' + rightsId)
 			#print(self.titleId + ' key = ' +  str(t.getTitleKeyBlock()))
-			self.hasValidTicket = t.getTitleKeyBlock() != 0
+			self.setHasValidTicket(t.getTitleKeyBlock() != 0)
 		except BaseException as e:
 			print('readMeta filed ' + self.path + ", " + str(e))
 			raise
 		self.close()
 
 	def setHasValidTicket(self, value):
+		if self.title().isUpdate:
+			self.hasValidTicket = True
+			return
+
 		try:
-			self.hasValidTicket = True if value and int(value) != 0 else False
+			self.hasValidTicket = (True if value and int(value) != 0 else False) or self.title().isUpdate
 		except:
 			pass
 
 	def getHasValidTicket(self):
-		return 1 if self.hasValidTicket and self.hasValidTicket == True else 0
+		if self.title().isUpdate:
+			return 1
+		return (1 if self.hasValidTicket and self.hasValidTicket == True else 0)
 
 	def setId(self, id):
 		if re.match('[A-F0-9]{16}', id, re.I):
@@ -654,16 +670,7 @@ class Nsp(PFS0):
 	def getVersion(self):
 		return self.version or ''
 			
-	def setPath(self, path):
-		ext = pathlib.Path(path).suffix
-		if ext == '.nsp':
-			self.hasValidTicket = True
-		elif ext == '.nsx':
-			self.hasValidTicket = False
-		else:
-			return
-			
-			
+	def setPath(self, path):			
 		self.path = path
 		self.version = '0'
 		
@@ -681,6 +688,16 @@ class Nsp(PFS0):
 		if z:
 			self.version = z.groups()[0]
 
+		ext = pathlib.Path(path).suffix
+		if ext == '.nsp':
+			if self.hasValidTicket == None:
+				self.setHasValidTicket(True)
+		elif ext == '.nsx':
+			if self.hasValidTicket == None:
+				self.setHasValidTicket(False)
+		else:
+			return
+
 	def getPath(self):
 		return self.path or ''
 			
@@ -690,20 +707,19 @@ class Nsp(PFS0):
 	def move(self):
 		if not self.path:
 			return False
-			
+		
 		if not self.fileName():
 			#print('could not get filename for ' + self.path)
 			return False
-			
-		if os.path.abspath(self.fileName()) == os.path.abspath(self.path):
+
+		if os.path.abspath(self.fileName()).lower() == os.path.abspath(self.path).lower():
 			return False
-			
 		if os.path.isfile(self.fileName()) and os.path.abspath(self.path) == os.path.abspath(self.fileName()):
 			print('duplicate title: ')
 			print(os.path.abspath(self.path))
 			print(os.path.abspath(self.fileName()))
 			return False
-			
+
 		try:
 			os.makedirs(os.path.dirname(self.fileName()), exist_ok=True)
 			newPath = self.fileName()
@@ -775,6 +791,14 @@ class Nsp(PFS0):
 		for f in (f for f in self if f._path.endswith('.cnmt.nca')):
 			return f
 		raise IOError('no cnmt in NSP')
+
+	def xml(self):
+		for f in (f for f in self if f._path.endswith('.xml')):
+			return f
+		raise IOError('no XML in NSP')
+
+	def hasDeltas(self):
+		return b'DeltaFragment' in self.xml().read()
 		
 	def application(self):
 		for f in (f for f in self if f._path.endswith('.nca') and not f._path.endswith('.cnmt.nca')):
@@ -819,12 +843,30 @@ class Nsp(PFS0):
 					#raise IOError('Mismatched masterKeyRevs!')
 
 		ticket.setMasterKeyRevision(newMasterKeyRev)
+		ticket.setRightsId((ticket.getRightsId() & 0xFFFFFFFFFFFFFFFF0000000000000000) + newMasterKeyRev)
 		ticket.setTitleKeyBlock(int.from_bytes(newTitleKey, 'big'))
 
 		for nca in self:
 			if type(nca) == Nca:
 				if nca.header.getCryptoType2() != newMasterKeyRev:
-					print('writing masterKeyRev for ' + str(nca._path))
+					print('writing masterKeyRev for %s, %d -> %d' % (str(nca._path),  nca.header.getCryptoType2(), newMasterKeyRev))
+
+					encKeyBlock = nca.header.getKeyBlock()
+
+					if int.from_bytes(encKeyBlock) != 0:
+						key = Keys.keyAreaKey(nca.header.getCryptoType2()-1, nca.header.keyIndex)
+						print('decrypting with %s (%d, %d)' % (str(hx(key)), nca.header.getCryptoType2()-1, nca.header.keyIndex))
+						crypto = aes128.AESECB(key)
+						decKeyBlock = crypto.decrypt(encKeyBlock)
+
+						key = Keys.keyAreaKey(newMasterKeyRev-1, nca.header.keyIndex)
+						print('encrypting with %s (%d, %d)' % (str(hx(key)), newMasterKeyRev-1, nca.header.keyIndex))
+						crypto = aes128.AESECB(key)
+
+						reEncKeyBlock = crypto.encrypt(decKeyBlock)
+						nca.header.setKeyBlock(reEncKeyBlock)
+
+
 					nca.header.setCryptoType2(newMasterKeyRev)
 			
 		

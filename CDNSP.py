@@ -18,7 +18,7 @@ from hashlib import sha256
 from struct import pack as pk, unpack as upk
 from io import TextIOWrapper
 from tqdm import tqdm
-
+import Titles
 import requests
 import unidecode
 import urllib3
@@ -200,16 +200,14 @@ def get_versionUpdates():
 	return r
 
 def get_name(titleId):
-	titleId = titleId.lower()
+	titleId = titleId.upper()
 	lines = titlekey_list
-	for line in lines:
-		if line == None:
-			return
-		temp = line.split("|")
-		if titleId.endswith('800'):
-			titleId = '%s000' % titleId[:-3]
-		if titleId.strip() == temp[0].strip():
-			return re.sub(r'[/\\:*?!"|™©®]+', "", unidecode.unidecode(temp[2].strip()))
+	if Titles.contains(titleId):
+			try:
+				t = Titles.get(titleId)
+				return re.sub(r'[/\\:*?!"|™©®]+', "", unidecode.unidecode(t.name.strip()))
+			except:
+				pass
 	return 'Unknown Title'
 
 
@@ -426,13 +424,21 @@ def download_title(gameDir, titleId, ver, tkey=None, nspRepack=False, n='', veri
 
 			print_('\nExtracted %s and %s from cetk!' % (os.path.basename(certPath), os.path.basename(tikPath)))
 
-	NCAs = {}
+	NCAs = {
+		0: [],
+		1: [],
+		2: [],
+		3: [],
+		4: [],
+		5: [],
+		6: [],
+	}
 	for type in [0, 3, 4, 5, 1, 2, 6]:  # Download smaller files first
 		for ncaID in CNMT.parse(CNMT.ncaTypes[type]):
 			print_('\nDownloading %s entry (%s.nca)...' % (CNMT.ncaTypes[type], ncaID))
 			url = 'https://atum%s.hac.%s.d4c.nintendo.net/c/c/%s?device_id=%s' % (n, env, ncaID, deviceId)
 			fPath = os.path.join(gameDir, ncaID + '.nca')
-			NCAs.update({type: download_file(url, fPath)})
+			NCAs[type].append(download_file(url, fPath))
 			if verify:
 				if calc_sha256(fPath) != CNMT.parse(CNMT.ncaTypes[type])[ncaID][2]:
 					print_('\n\n%s is corrupted, hashes don\'t match!' % os.path.basename(fPath))
@@ -444,17 +450,10 @@ def download_title(gameDir, titleId, ver, tkey=None, nspRepack=False, n='', veri
 		files.append(certPath)
 		files.append(tikPath)
 		for key in [1, 5, 2, 4, 6]:
-			try:
-				files.append(NCAs[key])
-			except KeyError:
-				pass
+			files.extend(NCAs[key])
 		files.append(cnmtNCA)
 		files.append(cnmtXML)
-		try:
-			files.append(NCAs[3])
-		except KeyError:
-			pass
-
+		files.extend(NCAs[3])
 		return files
 
 
@@ -724,90 +723,6 @@ class nsp:
 		header += remainder * b'\x00'
 		
 		return header
-
-def load_titlekeys():
-	global titlekey_list
-	try:
-		print_('\nloading titlekeys...')
-		with open('titlekeys.txt', encoding="utf8") as f:
-			lines = f.readlines()
-	except Exception as e:
-		print_("Error:", e)
-		print_('the -title command will NOT WORK to download games without it')
-		return
-	try:
-		for line in lines:
-			temp = line.split('|')
-			titleId = temp[0][0:16]
-			tkey = temp[1].lower()
-			name = temp[2]
-			line = '%s|%s|%s' % (titleId,tkey,name)
-			titlekey_list.append(line)
-		print_('\ntitlekeys loaded')
-	except Exception as e:
-		print_('Error: ', e)
-		return
-
-def update_db():
-	global titlekey_list
-	print_("\nDownloading new titlekey database...\n")
-	try:
-		url = dbURL
-		if url == '':
-			print_('\nDatabase url is empty. Check the CDNSPconfig')
-			return
-		if "http://" not in url and "https://" not in url:
-			try:
-				url = base64.b64decode(url)
-			except Exception as e:
-				print_("\nError decoding url: ", e)
-				return
-
-		r = requests.get(url)
-		r.encoding = 'utf-8'
-
-		if r.status_code == 200:
-			newdb = r.text.split('\r')
-
-			currdb = [x.strip() for x in titlekey_list]
-			print_('The following games have either been added or updated:\n')
-			for line in newdb:
-				line = line.strip()
-				if line != '':
-					temp = line.split('|')
-					titleId = temp[0][0:16]
-					tkey = temp[1].lower()
-					name = temp[2]
-					line = '%s|%s|%s' % (titleId,tkey,name)
-					if line not in currdb and line != None :
-						print_(line.split('|')[-1])
-
-			try:
-				print_('\nSaving new database...')
-				f = open('titlekeys.txt', 'w', encoding="utf8")
-				for line in newdb:
-					f.write(line)
-				f.close()
-				print_('\nDatabase update complete')
-				titlekey_list = []
-				load_titlekeys()
-			except Exception as e:
-				print_(e)
-				return
-		else:
-			print_('Error updating database: ', repr(r))
-			return
-			
-	except Exception as e:
-		print_('\nError updating database:', e)
-		return
-
-def title_in_keylist(titleId):
-	global titlekey_list
-	for title in titlekey_list:
-		if title.find(titleId) != -1:
-			return True
-	return False
 
 
 

@@ -44,10 +44,32 @@ def logMissingTitles(file):
 	f = open(file,"w", encoding="utf-8-sig")
 	
 	for k,t in Titles.items():
-		if not t.path and (not t.isDLC or Config.download.DLC) and (not t.isDemo or Config.download.demo) and (not t.isUpdate or Config.download.update) and (t.key or Config.download.sansTitleKey) and (len(titleWhitelist) == 0 or t.id in titleWhitelist) and t.id not in titleBlacklist:
+		if not t.path and not t.retailOnly and (t.isDLC or t.isUpdate or Config.download.base) and (not t.isDLC or Config.download.DLC) and (not t.isDemo or Config.download.demo) and (not t.isUpdate or Config.download.update) and (t.key or Config.download.sansTitleKey) and (len(titleWhitelist) == 0 or t.id in titleWhitelist) and t.id not in titleBlacklist:
 			f.write((t.id or ('0'*16)) + '|' + (t.key or ('0'*32)) + '|' + (t.name or '') + "\r\n")
 		
 	f.close()
+
+def logNcaDeltas(file):
+	initTitles()
+	initFiles()
+
+	x = open(file,"w", encoding="utf-8-sig")
+	
+	for k,f in Nsps.files.items():
+		try:
+			t = f.title()
+			if (t.isDLC or t.isUpdate or Config.download.base) and (not t.isDLC or Config.download.DLC) and (not t.isDemo or Config.download.demo) and (not t.isUpdate or Config.download.update) and (t.key or Config.download.sansTitleKey) and (len(titleWhitelist) == 0 or t.id in titleWhitelist) and t.id not in titleBlacklist:
+				f.open(f.path)
+				if f.hasDeltas():
+					print(f.path)
+					x.write(f.path + "\r\n")
+				f.close()
+		except KeyboardInterrupt:
+			raise
+		except BaseException as e:
+			print('error: ' + str(e))
+		
+	x.close()
 	
 def updateDb(url):
 	initTitles()
@@ -79,7 +101,7 @@ def downloadAll():
 	initFiles()
 
 	for k,t in Titles.items():
-		if not t.path and (not t.isDLC or Config.download.DLC) and (not t.isDemo or Config.download.demo) and (not t.isUpdate or Config.download.update) and (t.key or Config.download.sansTitleKey) and (len(titleWhitelist) == 0 or t.id in titleWhitelist) and t.id not in titleBlacklist:
+		if not t.path and not t.retailOnly and (t.isDLC or t.isUpdate or Config.download.base) and (not t.isDLC or Config.download.DLC) and (not t.isDemo or Config.download.demo) and (not t.isUpdate or Config.download.update) and (t.key or Config.download.sansTitleKey) and (len(titleWhitelist) == 0 or t.id in titleWhitelist) and t.id not in titleBlacklist:
 			if not t.id:
 				print('no valid id? ' + str(t.path))
 				continue
@@ -92,9 +114,18 @@ def downloadAll():
 			CDNSP.download_game(t.id.lower(), t.lastestVersion(), t.key, True, '', True)
 			
 def export(file):
-	Titles.save(file, ['id', 'rightsId', 'isUpdate', 'isDLC', 'isDemo', 'name', 'version', 'region'])
-	
+	initTitles()
+	Titles.save(file, ['id', 'rightsId', 'isUpdate', 'isDLC', 'isDemo', 'name', 'version', 'region', 'retailOnly'])
+
+global hasScanned
+hasScanned = False
+
 def scan():
+	global hasScanned
+
+	if hasScanned:
+		return
+	hasScanned = True
 	initTitles()
 	initFiles()
 
@@ -105,9 +136,10 @@ def organize():
 	initTitles()
 	initFiles()
 
-	scan()
+	#scan()
+	print('organizing')
 	for k, f in Nsps.files.items():
-		#print('')
+		#print(str(f.hasValidTicket) +' = ' + f.path)
 		f.move()
 	print('removing empty directories')
 	Nsps.removeEmptyDir('.', False)
@@ -129,6 +161,7 @@ def refresh():
 	
 def scanLatestTitleUpdates():
 	initTitles()
+	initFiles()
 
 	for k,i in CDNSP.get_versionUpdates().items():
 		id = str(k).upper()
@@ -152,16 +185,18 @@ def scanLatestTitleUpdates():
 	
 def updateVersions(force = True):
 	initTitles()
+	initFiles()
 
 	i = 0
 	for k,t in Titles.items():
 		if force or t.version == None:
-			v = t.lastestVersion(True)
-			print("%s[%s] v = %s" % (str(t.name), str(t.id), str(v)) )
+			if (t.isDLC or t.isUpdate or Config.download.base) and (not t.isDLC or Config.download.DLC) and (not t.isDemo or Config.download.demo) and (not t.isUpdate or Config.download.update) and (t.key or Config.download.sansTitleKey) and (len(titleWhitelist) == 0 or t.id in titleWhitelist) and t.id not in titleBlacklist:
+				v = t.lastestVersion(True)
+				print("%s[%s] v = %s" % (str(t.name), str(t.id), str(v)) )
 			
-			i = i + 1
-			if i % 20 == 0:
-				Titles.save()
+				i = i + 1
+				if i % 20 == 0:
+					Titles.save()
 			
 	for t in list(Titles.data().values()):
 		if not t.isUpdate and not t.isDLC and t.updateId and t.updateId and not Titles.contains(t.updateId):
@@ -204,6 +239,20 @@ def initFiles():
 	isInitFiles = True
 
 	Nsps.load()
+
+def unlockAll():
+	initTitles()
+	initFiles()
+
+	for k,f in Nsps.files.items():
+		if f.isUnlockable():
+			try:
+				print('unlocking ' + f.path)
+				f.open(f.path, 'r+b')
+				f.unlock()
+				f.close()
+			except BaseException as e:
+				print('error unlocking: ' + str(e))
 			
 if __name__ == '__main__':
 	titleWhitelist = []
@@ -234,15 +283,16 @@ if __name__ == '__main__':
 
 
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--base', type=bool, choices=[0, 1], default=Config.download.base*1, help='download base titles')
-	parser.add_argument('--demo', type=bool, choices=[0, 1], default=Config.download.demo*1, help='download demo titles')
-	parser.add_argument('--update', type=bool, choices=[0, 1], default=Config.download.update*1, help='download title updates')
-	parser.add_argument('--dlc', type=bool, choices=[0, 1], default=Config.download.DLC*1, help='download DLC titles')
-	parser.add_argument('--nsx', type=bool, choices=[0, 1], default=Config.download.sansTitleKey*1, help='download titles without the title key')
+	parser.add_argument('--base', type=int, choices=[0, 1], default=Config.download.base*1, help='download base titles')
+	parser.add_argument('--demo', type=int, choices=[0, 1], default=Config.download.demo*1, help='download demo titles')
+	parser.add_argument('--update', type=int, choices=[0, 1], default=Config.download.update*1, help='download title updates')
+	parser.add_argument('--dlc', type=int, choices=[0, 1], default=Config.download.DLC*1, help='download DLC titles')
+	parser.add_argument('--nsx', type=int, choices=[0, 1], default=Config.download.sansTitleKey*1, help='download titles without the title key')
 	parser.add_argument('-D', '--download-all', action="store_true", help='download ALL title(s)')
 	parser.add_argument('-d', '--download', help='download title(s)')
 	parser.add_argument('-i', '--info', help='show info about title or file')
-	parser.add_argument('-u', '--unlock', help='install title key into NSX / NSP')
+	parser.add_argument('-u', '--unlock', help='install available title key into NSX / NSP')
+	parser.add_argument('--unlock-all', action="store_true", help='install available title keys into all NSX files')
 	parser.add_argument('--set-masterkey2', help='Changes the master key encryption for NSP.')
 	parser.add_argument('--set-masterkey3', help='Changes the master key encryption for NSP.')
 	parser.add_argument('--set-masterkey4', help='Changes the master key encryption for NSP.')
@@ -256,14 +306,15 @@ if __name__ == '__main__':
 	parser.add_argument('-r', '--refresh', action="store_true", help='reads all meta from NSP files and queries CDN for latest version information')
 	parser.add_argument('-x', '--export', help='export title database in csv format')
 	parser.add_argument('-M', '--missing', help='export title database of titles you have not downloaded in csv format')
+	parser.add_argument('--nca-deltas', help='export list of NSPs containing delta updates')
 	
 	args = parser.parse_args()	
 
-	Config.download.base = args.base
-	Config.download.DLC = args.dlc
-	Config.download.demo = args.demo
-	Config.download.sansTitleKey = args.nsx
-	Config.download.update = args.update
+	Config.download.base = bool(args.base)
+	Config.download.DLC = bool(args.dlc)
+	Config.download.demo = bool(args.demo)
+	Config.download.sansTitleKey = bool(args.nsx)
+	Config.download.update = bool(args.update)
 	
 	if args.update_titles:
 		for url in Config.titleUrls:
@@ -322,6 +373,9 @@ if __name__ == '__main__':
 		f.close()
 		pass
 
+	if args.nca_deltas:
+		logNcaDeltas(args.nca_deltas)
+
 	if args.info:
 		initTitles()
 		initFiles()
@@ -342,6 +396,10 @@ if __name__ == '__main__':
 		
 	if args.V:
 		scanLatestTitleUpdates()
+
+	if args.unlock_all:
+		unlockAll()
+		pass
 
 	if args.unlock:
 		initTitles()
@@ -379,3 +437,4 @@ if __name__ == '__main__':
 	#downloadAll()
 
 	#Titles.save()
+
