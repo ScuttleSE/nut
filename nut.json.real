@@ -1,0 +1,29 @@
+
+{
+    "paths": {
+        "titleBase": "/samba/usb5/Switch/NSP/{baseName}/{name}[{id}][v{version}].nsp",
+        "titleDLC": "/samba/usb5/Switch/NSP/{baseName}/DLC - {name}[{id}][v{version}].nsp",
+        "titleUpdate": "/samba/usb5/Switch/NSP/{baseName}/UPD - {name}[{id}][v{version}].nsp",
+		"titleDemo": "/samba/usb5/Switch/NSP/_demos/{baseName}/{name}[{id}][v{version}].nsp",
+		"titleDemoUpdate": "/samba/usb5/Switch/NSP/_demos/{baseName}/UPD - {name}[{id}][v{version}].nsp",
+		"titleDatabase": "titledb",
+		"nspOut": "/samba/usb5/Switch/NSP_Incoming/",
+		"scan": "/samba/usb5/Switch/NSP_Incoming/"
+    },
+	"titleUrls": [
+		"http://snip.li/newkeydb"
+	],
+	"cdn": {
+		"region": "US",
+		"firmware": "5.1.0-0",
+		"deviceId": "0000000000000000",
+		"Environment": "lp1"
+	},
+	"download": {
+		"base": true,
+		"update": true,
+		"demo": false,
+		"dlc": true,
+		"sansTitleKey": false
+	}
+}

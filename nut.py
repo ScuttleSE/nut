@@ -283,20 +283,23 @@ if __name__ == '__main__':
 
 
 	parser = argparse.ArgumentParser()
+	parser.add_argument('file',nargs='*')
 	parser.add_argument('--base', type=int, choices=[0, 1], default=Config.download.base*1, help='download base titles')
 	parser.add_argument('--demo', type=int, choices=[0, 1], default=Config.download.demo*1, help='download demo titles')
 	parser.add_argument('--update', type=int, choices=[0, 1], default=Config.download.update*1, help='download title updates')
 	parser.add_argument('--dlc', type=int, choices=[0, 1], default=Config.download.DLC*1, help='download DLC titles')
 	parser.add_argument('--nsx', type=int, choices=[0, 1], default=Config.download.sansTitleKey*1, help='download titles without the title key')
 	parser.add_argument('-D', '--download-all', action="store_true", help='download ALL title(s)')
-	parser.add_argument('-d', '--download', help='download title(s)')
+	parser.add_argument('-d', '--download', nargs='+', help='download title(s)')
 	parser.add_argument('-i', '--info', help='show info about title or file')
 	parser.add_argument('-u', '--unlock', help='install available title key into NSX / NSP')
 	parser.add_argument('--unlock-all', action="store_true", help='install available title keys into all NSX files')
+	parser.add_argument('--set-masterkey1', help='Changes the master key encryption for NSP.')
 	parser.add_argument('--set-masterkey2', help='Changes the master key encryption for NSP.')
 	parser.add_argument('--set-masterkey3', help='Changes the master key encryption for NSP.')
 	parser.add_argument('--set-masterkey4', help='Changes the master key encryption for NSP.')
 	parser.add_argument('--set-masterkey5', help='Changes the master key encryption for NSP.')
+	parser.add_argument('--remove-title-rights', help='Removes title rights encryption from all NCA\'s in the NSP.')
 	parser.add_argument('-s', '--scan', action="store_true", help='scan for new NSP files')
 	parser.add_argument('-Z', action="store_true", help='update ALL title versions from nintendo')
 	parser.add_argument('-z', action="store_true", help='update newest title versions from nintendo')
@@ -304,7 +307,9 @@ if __name__ == '__main__':
 	parser.add_argument('-o', '--organize', action="store_true", help='rename and move all NSP files')
 	parser.add_argument('-U', '--update-titles', action="store_true", help='update titles db from urls')
 	parser.add_argument('-r', '--refresh', action="store_true", help='reads all meta from NSP files and queries CDN for latest version information')
-	parser.add_argument('-x', '--export', help='export title database in csv format')
+	parser.add_argument('-x', '--extract', nargs='+', help='extract / unpack a NSP')
+	parser.add_argument('-c', '--create', help='create / pack a NSP')
+	parser.add_argument('--export-missing', help='export title database in csv format')
 	parser.add_argument('-M', '--missing', help='export title database of titles you have not downloaded in csv format')
 	parser.add_argument('--nca-deltas', help='export list of NSPs containing delta updates')
 	
@@ -315,6 +320,22 @@ if __name__ == '__main__':
 	Config.download.demo = bool(args.demo)
 	Config.download.sansTitleKey = bool(args.nsx)
 	Config.download.update = bool(args.update)
+
+	if args.extract:
+		for filePath in args.extract:
+			f = Fs.Nsp(filePath, 'rb')
+			dir = os.path.splitext(os.path.basename(filePath))[0]
+			f.unpack(dir)
+			f.close()
+
+	if args.create:
+		print('creating ' + args.create)
+		nsp = Fs.Nsp(None, None)
+		nsp.path = args.create
+		nsp.pack(args.file)
+		#for filePath in args.file:
+		#	print(filePath)
+
 	
 	if args.update_titles:
 		for url in Config.titleUrls:
@@ -324,15 +345,40 @@ if __name__ == '__main__':
 	if args.download:
 		initTitles()
 		initFiles()
-		id = args.download.upper()
-		if len(id) != 16:
-			raise IOError('Invalid title id format')
+		for download in args.download:
+			bits = download.split(',')
 
-		if Titles.contains(id):
-			title = Titles.get(id)
-			CDNSP.download_game(title.id.lower(), title.lastestVersion(), title.key, True, '', True)
-		else:
-			CDNSP.download_game(id.lower(), Title.getCdnVersion(id.lower()), None, True, '', True)
+			version = None
+			key = None
+
+			if len(bits) == 1:
+				id = bits[0].upper()
+			elif len(bits) == 2:
+				id = bits[0].upper()
+				key = bits[1].strip()
+			elif len(bits) == 3:
+				id = bits[0].upper()
+				key = bits[1].strip()
+				version = bits[2].strip()
+			else:
+				print('invalid args: ' + download)
+				continue
+
+			if key == '':
+				key = None
+
+			if version == '':
+				version = None
+
+			if len(id) != 16:
+				raise IOError('Invalid title id format')
+
+			if Titles.contains(id):
+				title = Titles.get(id)
+
+				CDNSP.download_game(title.id.lower(), version or title.lastestVersion(), key or title.key, True, '', True)
+			else:
+				CDNSP.download_game(id.lower(), version or Title.getCdnVersion(id.lower()), key, True, '', True)
 	
 	if args.scan:
 		initTitles()
@@ -344,6 +390,13 @@ if __name__ == '__main__':
 	
 	if args.organize:
 		organize()
+
+	if args.set_masterkey1:
+		f = Fs.Nsp(args.set_masterkey1, 'r+b')
+		f.setMasterKeyRev(0)
+		f.flush()
+		f.close()
+		pass
 
 	if args.set_masterkey2:
 		f = Fs.Nsp(args.set_masterkey2, 'r+b')
@@ -369,6 +422,13 @@ if __name__ == '__main__':
 	if args.set_masterkey5:
 		f = Fs.Nsp(args.set_masterkey5, 'r+b')
 		f.setMasterKeyRev(5)
+		f.flush()
+		f.close()
+		pass
+
+	if args.remove_title_rights:
+		f = Fs.Nsp(args.remove_title_rights, 'r+b')
+		f.removeTitleRights()
 		f.flush()
 		f.close()
 		pass
@@ -419,8 +479,8 @@ if __name__ == '__main__':
 	if args.download_all:
 		downloadAll()
 		
-	if args.export:
-		export(args.export)
+	if args.export_missing:
+		export(args.export_missing)
 		
 	if args.missing:
 		logMissingTitles(args.missing)

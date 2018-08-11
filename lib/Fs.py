@@ -12,8 +12,10 @@ import re
 import pathlib
 import Keys
 import Config
+from tqdm import tqdm
 
 MEDIA_SIZE = 0x200
+
 
 def factory(name):
 	if name.endswith('.xci'):
@@ -309,6 +311,10 @@ class NcaHeader(File):
 			self.sectionHashes.append(self.sectionTables[i])
 
 		self.masterKey = (self.cryptoType if self.cryptoType > self.cryptoType2 else self.cryptoType2)-1
+
+		if self.masterKey < 0:
+			self.masterKey = 0
+		
 		
 		self.encKeyBlock = self.getKeyBlock()
 		#for i in range(4):
@@ -356,6 +362,14 @@ class NcaHeader(File):
 		self.seek(0x300)
 		return self.write(value)
 
+	def getCryptoType(self):
+		self.seek(0x206)
+		return self.readInt8()
+
+	def setCryptoType(self, value):
+		self.seek(0x206)
+		self.writeInt8(value)
+
 	def getCryptoType2(self):
 		self.seek(0x220)
 		return self.readInt8()
@@ -363,6 +377,14 @@ class NcaHeader(File):
 	def setCryptoType2(self, value):
 		self.seek(0x220)
 		self.writeInt8(value)
+
+	def getRightsId(self):
+		self.seek(0x230)
+		return self.readInt128('big')
+
+	def setRightsId(self, value):
+		self.seek(0x230)
+		self.writeInt128(value, 'big')
 
 
 class Nca(File):
@@ -607,10 +629,10 @@ class Nsp(PFS0):
 		if self.titleId in Titles.keys():
 			return Titles.get(self.titleId)
 			
-		self.title = Title.Title()
-		self.title.setId(self.titleId)
-		Titles.data()[self.titleId] = self.title
-		return self.title
+		t = Title.Title()
+		t.setId(self.titleId)
+		Titles.data()[self.titleId] = t
+		return t
 		
 	def readMeta(self):
 		self.open()
@@ -624,13 +646,33 @@ class Nsp(PFS0):
 			rightsId = hx(t.getRightsId().to_bytes(0x10, byteorder='big')).decode('utf-8').upper()
 			self.titleId = rightsId[0:16]
 			self.title().setRightsId(rightsId)
-			#print('rightsId = ' + rightsId)
-			#print(self.titleId + ' key = ' +  str(t.getTitleKeyBlock()))
+			print('rightsId = ' + rightsId)
+			print(self.titleId + ' key = ' +  str(t.getTitleKeyBlock()))
 			self.setHasValidTicket(t.getTitleKeyBlock() != 0)
 		except BaseException as e:
 			print('readMeta filed ' + self.path + ", " + str(e))
 			raise
 		self.close()
+
+	def unpack(self, path):
+		os.makedirs(path, exist_ok=True)
+
+		for nspF in self:
+			filePath = os.path.abspath(path + '/' + nspF._path)
+			f = open(filePath, 'wb')
+			nspF.rewind()
+			i = 0
+
+			pageSize = 0x10000
+
+			while True:
+				buf = nspF.read(pageSize)
+				if len(buf) == 0:
+					break
+				i += len(buf)
+				f.write(buf)
+			f.close()
+			print(filePath)
 
 	def setHasValidTicket(self, value):
 		if self.title().isUpdate:
@@ -824,23 +866,33 @@ class Nsp(PFS0):
 
 	def setMasterKeyRev(self, newMasterKeyRev):
 		if not Titles.contains(self.titleId):
-			raise IOError('No title key found in database!')
+			raise IOError('No title key found in database! ' + self.titleId)
 
 		ticket = self.ticket()
 		masterKeyRev = ticket.getMasterKeyRevision()
 		titleKey = ticket.getTitleKeyBlock()
-		newTitleKey = Keys.changeTitleKeyMasterKey(titleKey.to_bytes(16, byteorder='big'), masterKeyRev, newMasterKeyRev)
+		newTitleKey = Keys.changeTitleKeyMasterKey(titleKey.to_bytes(16, byteorder='big'), Keys.getMasterKeyIndex(masterKeyRev), Keys.getMasterKeyIndex(newMasterKeyRev))
+		rightsId = ticket.getRightsId()
 
-		print('rightsId =\t' + hex(ticket.getRightsId()))
+		if rightsId != 0:
+			raise IOError('please remove titlerights first')
+
+		if (newMasterKeyRev == None and rightsId == 0) or masterKeyRev == newMasterKeyRev:
+			print('Nothing to do')
+			return
+
+		print('rightsId =\t' + hex(rightsId))
 		print('titleKey =\t' + str(hx(titleKey.to_bytes(16, byteorder='big'))))
 		print('newTitleKey =\t' + str(hx(newTitleKey)))
 		print('masterKeyRev =\t' + hex(masterKeyRev))
+
+
 
 		for nca in self:
 			if type(nca) == Nca:
 				if nca.header.getCryptoType2() != masterKeyRev:
 					pass
-					#raise IOError('Mismatched masterKeyRevs!')
+					raise IOError('Mismatched masterKeyRevs!')
 
 		ticket.setMasterKeyRevision(newMasterKeyRev)
 		ticket.setRightsId((ticket.getRightsId() & 0xFFFFFFFFFFFFFFFF0000000000000000) + newMasterKeyRev)
@@ -849,38 +901,81 @@ class Nsp(PFS0):
 		for nca in self:
 			if type(nca) == Nca:
 				if nca.header.getCryptoType2() != newMasterKeyRev:
-					print('writing masterKeyRev for %s, %d -> %d' % (str(nca._path),  nca.header.getCryptoType2(), newMasterKeyRev))
+					print('writing masterKeyRev for %s, %d -> %s' % (str(nca._path),  nca.header.getCryptoType2(), str(newMasterKeyRev)))
 
 					encKeyBlock = nca.header.getKeyBlock()
 
-					if int.from_bytes(encKeyBlock) != 0:
-						key = Keys.keyAreaKey(nca.header.getCryptoType2()-1, nca.header.keyIndex)
-						print('decrypting with %s (%d, %d)' % (str(hx(key)), nca.header.getCryptoType2()-1, nca.header.keyIndex))
+					if sum(encKeyBlock) != 0:
+						key = Keys.keyAreaKey(Keys.getMasterKeyIndex(masterKeyRev), nca.header.keyIndex)
+						print('decrypting with %s (%d, %d)' % (str(hx(key)), Keys.getMasterKeyIndex(masterKeyRev), nca.header.keyIndex))
 						crypto = aes128.AESECB(key)
 						decKeyBlock = crypto.decrypt(encKeyBlock)
 
-						key = Keys.keyAreaKey(newMasterKeyRev-1, nca.header.keyIndex)
-						print('encrypting with %s (%d, %d)' % (str(hx(key)), newMasterKeyRev-1, nca.header.keyIndex))
+						key = Keys.keyAreaKey(Keys.getMasterKeyIndex(newMasterKeyRev), nca.header.keyIndex)
+						print('encrypting with %s (%d, %d)' % (str(hx(key)), Keys.getMasterKeyIndex(newMasterKeyRev), nca.header.keyIndex))
 						crypto = aes128.AESECB(key)
 
 						reEncKeyBlock = crypto.encrypt(decKeyBlock)
 						nca.header.setKeyBlock(reEncKeyBlock)
 
 
-					nca.header.setCryptoType2(newMasterKeyRev)
+					if newMasterKeyRev >= 3:
+						nca.header.setCryptoType(2)
+						nca.header.setCryptoType2(newMasterKeyRev)
+					else:
+						nca.header.setCryptoType(newMasterKeyRev)
+						nca.header.setCryptoType2(0)
+
+
+	def removeTitleRights(self):
+		if not Titles.contains(self.titleId):
+			raise IOError('No title key found in database! ' + self.titleId)
+
+		ticket = self.ticket()
+		masterKeyRev = ticket.getMasterKeyRevision()
+		titleKeyDec = Keys.decryptTitleKey(ticket.getTitleKeyBlock().to_bytes(16, byteorder='big'), Keys.getMasterKeyIndex(masterKeyRev))
+		rightsId = ticket.getRightsId()
+
+		print('rightsId =\t' + hex(rightsId))
+		print('titleKeyDec =\t' + str(hx(titleKeyDec)))
+		print('masterKeyRev =\t' + hex(masterKeyRev))
+
+
+
+		for nca in self:
+			if type(nca) == Nca:
+				if nca.header.getCryptoType2() != masterKeyRev:
+					pass
+					raise IOError('Mismatched masterKeyRevs!')
+
+
+		ticket.setRightsId(0)
+
+		for nca in self:
+			if type(nca) == Nca:
+				if nca.header.getRightsId() == 0:
+					continue
+
+				print('writing masterKeyRev for %s, %d' % (str(nca._path),  masterKeyRev))
+				crypto = aes128.AESECB(Keys.keyAreaKey(Keys.getMasterKeyIndex(masterKeyRev), nca.header.keyIndex))
+
+				encKeyBlock = crypto.encrypt(titleKeyDec * 4)
+				nca.header.setRightsId(0)
+				nca.header.setKeyBlock(encKeyBlock)
+				Hex.dump(encKeyBlock)
 			
 		
 	def pack(self, files):
 		if not self.path:
 			return False
 			
-		print_('\tRepacking to NSP...')
+		print('\tRepacking to NSP...')
 		
 		hd = self.generateHeader(files)
 		
 		totSize = len(hd) + sum(os.path.getsize(file) for file in files)
 		if os.path.exists(self.path) and os.path.getsize(self.path) == totSize:
-			print_('\t\tRepack %s is already complete!' % self.path)
+			print('\t\tRepack %s is already complete!' % self.path)
 			return
 			
 		t = tqdm(total=totSize, unit='B', unit_scale=True, desc=os.path.basename(self.path), leave=False)
@@ -902,7 +997,7 @@ class Nsp(PFS0):
 					t.update(len(buf))
 		t.close()
 		
-		print_('\t\tRepacked to %s!' % outf.name)
+		print('\t\tRepacked to %s!' % outf.name)
 		outf.close()
 
 	def generateHeader(self, files):
